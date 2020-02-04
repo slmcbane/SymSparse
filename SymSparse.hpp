@@ -131,6 +131,20 @@ public:
                     [](auto e1, auto e2) { return get<0>(e1) < get<0>(e2); });
             combine_duplicates(row);
         }
+    } // Container constructor
+
+    template <class CheckBounds = std::false_type>
+    const small_vec &row(std::size_t i, CheckBounds _ = CheckBounds{}) const
+    {
+        if (CheckBounds::value)
+        {
+            if (i >= m_rows.size())
+            {
+                throw OutOfBoundsIndex{i};
+            }
+        }
+
+        return m_rows[i];
     }
 
 private:
@@ -161,9 +175,57 @@ private:
 
 #ifdef DOCTEST_LIBRARY_INCLUDED
 
-TEST_CASE("Check constructor of SymmetricSparseMatrix")
+TEST_CASE("Test constructor of SymmetricSparseMatrix")
 {
+    SUBCASE("No funny business, just a list of entries in sorted order")
+    {
+        std::array<std::array<int, 3>, 10> entries {
+            {0, 0, 1}, {0, 1, 2}, {0, 2, 3}, {0, 3, 4},
+            {1, 1, 2}, {1, 2, 3}, {1, 3, 4}, {2, 2, 3},
+            {2, 3, 4}, {3, 3, 4} };
 
+        SymmetricSparseMatrix<int, 3> A(4, entries);
+
+        {
+            const auto &row = A.row(0);
+            REQUIRE(row.size() == 4);
+            REQUIRE(get<0>(row[0]) == 0);
+            REQUIRE(get<1>(row[0]) == 1);
+            REQUIRE(get<0>(row[1]) == 1);
+            REQUIRE(get<1>(row[1]) == 2);
+            REQUIRE(get<0>(row[2]) == 2);
+            REQUIRE(get<1>(row[2]) == 3);
+            REQUIRE(get<0>(row[3]) == 3);
+            REQUIRE(get<1>(row[3]) == 4);
+        }
+        
+        {
+            const auto &row = A.row(1);
+            REQUIRE(row.size() == 3);
+            REQUIRE(get<0>(row[0]) == 1);
+            REQUIRE(get<1>(row[0]) == 2);
+            REQUIRE(get<0>(row[1]) == 2);
+            REQUIRE(get<1>(row[1]) == 3);
+            REQUIRE(get<0>(row[2]) == 3);
+            REQUIRE(get<1>(row[2]) == 4);
+        }
+
+        {
+            const auto &row = A.row(2);
+            REQUIRE(row.size() == 2);
+            REQUIRE(get<0>(row[0]) == 2);
+            REQUIRE(get<1>(row[0]) == 3);
+            REQUIRE(get<0>(row[1]) == 3);
+            REQUIRE(get<1>(row[1]) == 4);
+        }
+
+        {
+            const auto &row = A.row(3);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 3);
+            REQUIRE(get<1>(row[0]) == 4);
+        }
+    } // SUBCASE
 } // TEST_CASE
 
 #endif // DOCTEST_LIBRARY_INCLUDED
