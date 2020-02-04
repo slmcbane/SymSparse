@@ -32,12 +32,23 @@
 #include <type_traits>
 #include <vector>
 
+using std::get;
+
+#ifdef DOCTEST_LIBRARY_INCLUDED
+
+#include <random>
+
+#endif // DOCTEST_LIBRARY_INCLUDED
+
 namespace SymSparse
 {
 
 struct OutOfBoundsIndex : public std::exception
 {
-    const std::size_t nrows, index;
+    std::size_t nrows, index;
+
+    OutOfBoundsIndex(std::size_t n, std::size_t i) noexcept : nrows{n}, index{i}
+    {}
 };
 
 /*
@@ -58,15 +69,16 @@ struct OutOfBoundsIndex : public std::exception
  *  - There is at most 1 entry in each column within a row.
  *  - No entries are stored with column < row.
  */
-template <class T, std::size_t MaxPerRow>
+template <class T, std::size_t MaxPerRow, bool SmallVecSizeCheck = true>
 class SymmetricSparseMatrix
 {
 public:
-    typedef smv::SmallVector<std::tuple<std::size_t, T>, MaxPerRow+1> small_vec;
+    typedef smv::SmallVector<std::tuple<std::size_t, T>,
+                             MaxPerRow+1, SmallVecSizeCheck> small_vec;
     
     // Initialize matrix with appropriate number of rows, but no entries
     SymmetricSparseMatrix(std::size_t nrows) :
-        m_rows(static_cast<decltype(m_rows)::size_type>(nrows))
+        m_rows(static_cast<typename decltype(m_rows)::size_type>(nrows))
     {}
    
     /*
@@ -93,7 +105,7 @@ public:
     template <class Container, class CheckBounds = std::true_type>
     SymmetricSparseMatrix(std::size_t nrows, const Container &entries,
                           CheckBounds check_indices = CheckBounds{}) :
-        m_rows(static_cast<decltype(m_rows)::size_type>(nrows))
+        m_rows(static_cast<typename decltype(m_rows)::size_type>(nrows))
     {
         // Add all entries to appropriate rows.
         // Swap row and column to store everything as upper triangular.
@@ -103,15 +115,15 @@ public:
             std::size_t col = get<1>(entry);
 
             // Bounds check?
-            if (CheckBounds::value)
+            if (check_indices())
             {
                 if (row >= nrows)
                 {
-                    throw OutOfBoundsIndex{row};
+                    throw OutOfBoundsIndex{nrows, row};
                 }
                 if (col >= nrows)
                 {
-                    throw OutOfBoundsIndex{col};
+                    throw OutOfBoundsIndex{nrows, col};
                 }
             }
             
@@ -121,7 +133,7 @@ public:
             }
             T val = get<2>(entry);
 
-            rows[row].push_back(std::make_tuple(col, val));
+            m_rows[row].push_back(std::make_tuple(col, val));
         }
 
         // Sort each row, then combine duplicates
@@ -134,13 +146,14 @@ public:
     } // Container constructor
 
     template <class CheckBounds = std::false_type>
-    const small_vec &row(std::size_t i, CheckBounds _ = CheckBounds{}) const
+    const small_vec &row(std::size_t i,
+            CheckBounds check_bounds = CheckBounds{}) const
     {
-        if (CheckBounds::value)
+        if (check_bounds())
         {
             if (i >= m_rows.size())
             {
-                throw OutOfBoundsIndex{i};
+                throw OutOfBoundsIndex{m_rows.size(), i};
             }
         }
 
@@ -152,6 +165,11 @@ private:
 
     void combine_duplicates(small_vec &row) noexcept
     {
+        if (row.size() == 0)
+        {
+            return;
+        }
+
         std::size_t i = 0, j;
         while (i < row.size() - 1)
         {
@@ -179,10 +197,10 @@ TEST_CASE("Test constructor of SymmetricSparseMatrix")
 {
     SUBCASE("No funny business, just a list of entries in sorted order")
     {
-        std::array<std::array<int, 3>, 10> entries {
-            {0, 0, 1}, {0, 1, 2}, {0, 2, 3}, {0, 3, 4},
-            {1, 1, 2}, {1, 2, 3}, {1, 3, 4}, {2, 2, 3},
-            {2, 3, 4}, {3, 3, 4} };
+        std::array<std::array<int, 3>, 10> entries = {
+            0, 0, 1, 0, 1, 2, 0, 2, 3, 0, 3, 4,
+            1, 1, 2, 1, 2, 3, 1, 3, 4, 2, 2, 3,
+            2, 3, 4, 3, 3, 4 };
 
         SymmetricSparseMatrix<int, 3> A(4, entries);
 
@@ -226,6 +244,181 @@ TEST_CASE("Test constructor of SymmetricSparseMatrix")
             REQUIRE(get<1>(row[0]) == 4);
         }
     } // SUBCASE
+
+    SUBCASE("All indices upper triangular, some need combined")
+    {
+        std::vector<std::tuple<int, int, int>> entries = {
+            std::make_tuple(0, 0, 1),
+            std::make_tuple(0, 1, 1),
+            std::make_tuple(0, 2, 3),
+            std::make_tuple(0, 3, 4),
+            std::make_tuple(0, 1, 1),
+            std::make_tuple(1, 1, 1),
+            std::make_tuple(1, 2, 3),
+            std::make_tuple(1, 3, 4),
+            std::make_tuple(1, 1, 1),
+            std::make_tuple(2, 2, 3),
+            std::make_tuple(2, 3, 4),
+            std::make_tuple(3, 3, 4)
+        };
+
+        auto construct_bad = [&]()
+        {
+            return SymmetricSparseMatrix<int, 3>(4, entries);
+        };
+        auto construct_bad_but_nothrow = [&]()
+        {
+            return SymmetricSparseMatrix<int, 3, false>(4, entries);
+        };
+        auto construct_good = [&]()
+        {
+            return SymmetricSparseMatrix<int, 4>(4, entries);
+        };
+
+        // By default this should throw because we will have extra elements in
+        // the first row.
+        REQUIRE_THROWS_AS(construct_bad(), smv::MaxSizeExceeded);
+        REQUIRE_NOTHROW(construct_good());
+        REQUIRE_NOTHROW(construct_bad_but_nothrow());
+
+        // Check entries
+        const SymmetricSparseMatrix<int, 4> A(4, entries);
+
+        {
+            const auto &row = A.row(0);
+            REQUIRE(row.size() == 4);
+            REQUIRE(get<0>(row[0]) == 0);
+            REQUIRE(get<1>(row[0]) == 1);
+            REQUIRE(get<0>(row[1]) == 1);
+            REQUIRE(get<1>(row[1]) == 2);
+            REQUIRE(get<0>(row[2]) == 2);
+            REQUIRE(get<1>(row[2]) == 3);
+            REQUIRE(get<0>(row[3]) == 3);
+            REQUIRE(get<1>(row[3]) == 4);
+        }
+        
+        {
+            const auto &row = A.row(1);
+            REQUIRE(row.size() == 3);
+            REQUIRE(get<0>(row[0]) == 1);
+            REQUIRE(get<1>(row[0]) == 2);
+            REQUIRE(get<0>(row[1]) == 2);
+            REQUIRE(get<1>(row[1]) == 3);
+            REQUIRE(get<0>(row[2]) == 3);
+            REQUIRE(get<1>(row[2]) == 4);
+        }
+
+        {
+            const auto &row = A.row(2);
+            REQUIRE(row.size() == 2);
+            REQUIRE(get<0>(row[0]) == 2);
+            REQUIRE(get<1>(row[0]) == 3);
+            REQUIRE(get<0>(row[1]) == 3);
+            REQUIRE(get<1>(row[1]) == 4);
+        }
+
+        {
+            const auto &row = A.row(3);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 3);
+            REQUIRE(get<1>(row[0]) == 4);
+        }
+
+    } // SUBCASE
+
+    SUBCASE("Test full combo, lower triangular indices + combining")
+    {
+        std::vector<std::tuple<int, int, int>> entries = {
+            std::make_tuple(0, 0, 1),
+            std::make_tuple(0, 1, 1),
+            std::make_tuple(1, 0, 1),
+            std::make_tuple(0, 2, 1),
+            std::make_tuple(2, 0, 1),
+            std::make_tuple(0, 2, 1),
+            std::make_tuple(0, 3, 2),
+            std::make_tuple(3, 0, 2),
+            std::make_tuple(1, 1, 1),
+            std::make_tuple(1, 1, 1),
+            std::make_tuple(1, 2, 2),
+            std::make_tuple(2, 1, 1),
+            std::make_tuple(1, 3, 4),
+            std::make_tuple(2, 2, 3),
+            std::make_tuple(3, 2, 4),
+            std::make_tuple(3, 3, 4)
+        };
+
+        std::shuffle(entries.begin(), entries.end(),
+                     std::default_random_engine());
+
+        const SymmetricSparseMatrix<int, 7> A(4, entries);
+
+        {
+            const auto &row = A.row(0);
+            REQUIRE(row.size() == 4);
+            REQUIRE(get<0>(row[0]) == 0);
+            REQUIRE(get<1>(row[0]) == 1);
+            REQUIRE(get<0>(row[1]) == 1);
+            REQUIRE(get<1>(row[1]) == 2);
+            REQUIRE(get<0>(row[2]) == 2);
+            REQUIRE(get<1>(row[2]) == 3);
+            REQUIRE(get<0>(row[3]) == 3);
+            REQUIRE(get<1>(row[3]) == 4);
+        }
+        
+        {
+            const auto &row = A.row(1);
+            REQUIRE(row.size() == 3);
+            REQUIRE(get<0>(row[0]) == 1);
+            REQUIRE(get<1>(row[0]) == 2);
+            REQUIRE(get<0>(row[1]) == 2);
+            REQUIRE(get<1>(row[1]) == 3);
+            REQUIRE(get<0>(row[2]) == 3);
+            REQUIRE(get<1>(row[2]) == 4);
+        }
+
+        {
+            const auto &row = A.row(2);
+            REQUIRE(row.size() == 2);
+            REQUIRE(get<0>(row[0]) == 2);
+            REQUIRE(get<1>(row[0]) == 3);
+            REQUIRE(get<0>(row[1]) == 3);
+            REQUIRE(get<1>(row[1]) == 4);
+        }
+
+        {
+            const auto &row = A.row(3);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 3);
+            REQUIRE(get<1>(row[0]) == 4);
+        }
+    } // SUBCASE
+} // TEST_CASE
+
+TEST_CASE("Check that some exceptions get thrown as they should")
+{
+    std::array<std::array<int, 3>, 1> entry = { 0, 3, 4 };
+
+    auto construct_bad = [&]()
+    {
+        return SymmetricSparseMatrix<int, 1>(3, entry);
+    };
+
+    REQUIRE_THROWS_AS(construct_bad(), OutOfBoundsIndex);
+
+    auto construct_ok = [&]()
+    {
+        return SymmetricSparseMatrix<int, 1>(3, entry, std::false_type{});
+    };
+
+    REQUIRE_NOTHROW(construct_ok());
+
+    const SymmetricSparseMatrix<int, 1> A(3, entry, std::false_type{});
+
+    REQUIRE_NOTHROW(A.row(0));
+    REQUIRE_NOTHROW(A.row(1));
+    REQUIRE_NOTHROW(A.row(2));
+    REQUIRE_NOTHROW(A.row(3));
+    REQUIRE_THROWS_AS(A.row(3, std::true_type{}), OutOfBoundsIndex);
 } // TEST_CASE
 
 #endif // DOCTEST_LIBRARY_INCLUDED
