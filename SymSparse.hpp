@@ -27,24 +27,72 @@
 
 #include <algorithm>
 #include <cstddef> // std::size_t;
+#include <exception>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 namespace SymSparse
 {
 
+struct OutOfBoundsIndex : public std::exception
+{
+    const std::size_t nrows, index;
+};
+
+/*
+ * A square, symmetric sparse matrix.
+ *
+ * This class stores the upper triangular part of a sparse symmetric matrix.
+ * The format is a list of rows, where each row is stored as a list of entries
+ * in that row (as tuples (col, val)).
+ *
+ * Template parameters
+ * -------------------
+ *  - T is the type of the stored entries
+ *  - MaxPerRow is the maximum number of __off diagonal__ entries in each row
+ *
+ * Invariants
+ * ----------
+ *  - Entries in each row are stored in sorted order, by column.
+ *  - There is at most 1 entry in each column within a row.
+ *  - No entries are stored with column < row.
+ */
 template <class T, std::size_t MaxPerRow>
 class SymmetricSparseMatrix
 {
 public:
     typedef smv::SmallVector<std::tuple<std::size_t, T>, MaxPerRow+1> small_vec;
-
+    
+    // Initialize matrix with appropriate number of rows, but no entries
     SymmetricSparseMatrix(std::size_t nrows) :
         m_rows(static_cast<decltype(m_rows)::size_type>(nrows))
     {}
-    
-    template <class Container>
-    SymmetricSparseMatrix(std::size_t nrows, const Container &entries) :
+   
+    /*
+     * Initialize matrix from a list of entries
+     *
+     * Arguments:
+     *   - nrows is the number of rows (and columns) in the matrix
+     *   - Container is an iterable container. The elements in `entries` are
+     *     accessible using a function template `get<i>` discoverable via ADL;
+     *     I imagine this being `std::tuple`. The entries are in the format
+     *     `(row, col, val)`. Entries in the lower triangular part are instead
+     *     put into upper triangular format, and multiple entries in the same
+     *     row and column have their values summed.
+     *   - check_indices is a std::bool_constant; if it is `std::true_type{}`
+     *     (default) then the values of `row` and `col` are checked to make sure
+     *     they are in bounds given the size `nrows`.
+     *
+     * The constructed matrix has rows in sorted order, and each row and column
+     * has either 0 or 1 entry.
+     * 
+     * If `check_indices` is enabled (default) and an index is out of bounds, an
+     * `OutOfBoundsIndex` exception is thrown.
+     */
+    template <class Container, class CheckBounds = std::true_type>
+    SymmetricSparseMatrix(std::size_t nrows, const Container &entries,
+                          CheckBounds check_indices = CheckBounds{}) :
         m_rows(static_cast<decltype(m_rows)::size_type>(nrows))
     {
         // Add all entries to appropriate rows.
@@ -53,6 +101,20 @@ public:
         {
             std::size_t row = get<0>(entry);
             std::size_t col = get<1>(entry);
+
+            // Bounds check?
+            if (CheckBounds::value)
+            {
+                if (row >= nrows)
+                {
+                    throw OutOfBoundsIndex{row};
+                }
+                if (col >= nrows)
+                {
+                    throw OutOfBoundsIndex{col};
+                }
+            }
+            
             if (col < row)
             {
                 std::swap(row, col);
@@ -92,6 +154,23 @@ private:
         row.erase(new_end, row.end());
     }
 };
+
+/********************************************************************************
+ * This block of code is tests, compiled if doctest.hpp is included
+ *******************************************************************************/
+
+#ifdef DOCTEST_LIBRARY_INCLUDED
+
+TEST_CASE("Check constructor of SymmetricSparseMatrix")
+{
+
+} // TEST_CASE
+
+#endif // DOCTEST_LIBRARY_INCLUDED
+
+/********************************************************************************
+ * End tests
+ *******************************************************************************/
 
 } // namespace SymSparse
 
