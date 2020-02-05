@@ -49,6 +49,25 @@ struct OutOfBoundsIndex : public std::exception
 
     OutOfBoundsIndex(std::size_t n, std::size_t i) noexcept : nrows{n}, index{i}
     {}
+
+    const char *what() const noexcept
+    {
+        return "Out of bounds index in matrix operation; members nrows and index have size and index";
+    }
+};
+
+struct DimensionMismatch : public std::exception
+{
+    std::size_t expected, actual;
+
+    DimensionMismatch(std::size_t e, std::size_t a) noexcept :
+        expected{e}, actual{a}
+    {}
+
+    const char *what() const noexcept
+    {
+        return "Dimension mismatch in matrix operation; members expected and actual store sizes";
+    }
 };
 
 /*
@@ -239,7 +258,7 @@ public:
     template <class X, class Y, class CheckSizes = std::true_type>
     Y &mul(const X &x, Y &y, CheckSizes size_check = CheckSizes{}) const
     {
-        if (size_check())
+        if (size_check)
         {
             if (x.size() != m_rows.size())
             {
@@ -269,6 +288,42 @@ public:
                 if (j != i)
                 {
                     y[j] += a_ij * x[i];
+                }
+            }
+        }
+        return y;
+    }
+
+    template <class X, class Y, class CheckSizes = std::true_type>
+    Y &mul(T a, const X &x, T b, Y &y, CheckSizes size_check = CheckSizes{}) const
+    {
+        if (size_check)
+        {
+            if (x.size() != m_rows.size())
+            {
+                throw DimensionMismatch(m_rows.size(), x.size());
+            }
+            if (y.size() != m_rows.size())
+            {
+                throw DimensionMismatch(m_rows.size(), y.size());
+            }
+        }
+
+        for (std::size_t i = 0; i < m_rows.size(); ++i)
+        {
+            y[i] = b * y[i];
+        }
+
+        for (std::size_t i = 0; i < m_rows.size(); ++i)
+        {
+            for (const auto &entry: m_rows[i])
+            {
+                const auto j = get<0>(entry);
+                const auto a_times_aij = a * get<1>(entry);
+                y[i] += a_times_aij * x[j];
+                if (j != i)
+                {
+                    y[j] += a_times_aij * x[i];
                 }
             }
         }
