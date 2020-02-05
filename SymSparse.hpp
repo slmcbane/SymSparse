@@ -115,7 +115,7 @@ public:
             std::size_t col = get<1>(entry);
 
             // Bounds check?
-            if (check_indices())
+            if (check_indices)
             {
                 if (row >= nrows)
                 {
@@ -139,8 +139,9 @@ public:
         // Sort each row, then combine duplicates
         for (auto &row: m_rows)
         {
+            using Entry = std::tuple<std::size_t, T>;
             std::sort(row.begin(), row.end(),
-                    [](auto e1, auto e2) { return get<0>(e1) < get<0>(e2); });
+                    [](Entry e1, Entry e2) { return get<0>(e1) < get<0>(e2); });
             combine_duplicates(row);
         }
     } // Container constructor
@@ -149,7 +150,7 @@ public:
     const small_vec &row(std::size_t i,
             CheckBounds check_bounds = CheckBounds{}) const
     {
-        if (check_bounds())
+        if (check_bounds)
         {
             if (i >= m_rows.size())
             {
@@ -164,7 +165,7 @@ public:
     void insert_entry(std::size_t i, std::size_t j, T val,
             CheckBounds check_bounds = CheckBounds{})
     {
-        if (check_bounds())
+        if (check_bounds)
         {
             if (i >= m_rows.size())
             {
@@ -188,6 +189,7 @@ private:
 
     static void combine_duplicates(small_vec &row) noexcept
     {
+        using Entry = std::tuple<std::size_t, T>;
         if (row.size() == 0)
         {
             return;
@@ -205,7 +207,7 @@ private:
             i = j;
         }
         auto new_end = std::unique(row.begin(), row.end(),
-                [](auto e1, auto e2) { return get<0>(e1) == get<0>(e2); });
+                [](Entry e1, Entry e2) { return get<0>(e1) == get<0>(e2); });
         row.erase(new_end, row.end());
     }
 
