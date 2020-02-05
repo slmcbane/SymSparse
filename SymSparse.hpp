@@ -145,7 +145,7 @@ public:
         }
     } // Container constructor
 
-    template <class CheckBounds = std::false_type>
+    template <class CheckBounds = std::true_type>
     const small_vec &row(std::size_t i,
             CheckBounds check_bounds = CheckBounds{}) const
     {
@@ -160,10 +160,33 @@ public:
         return m_rows[i];
     }
 
+    template <class CheckBounds = std::true_type>
+    void insert_entry(std::size_t i, std::size_t j, T val,
+            CheckBounds check_bounds = CheckBounds{})
+    {
+        if (check_bounds())
+        {
+            if (i >= m_rows.size())
+            {
+                throw OutOfBoundsIndex{m_rows.size(), i};
+            }
+            if (j >= m_rows.size())
+            {
+                throw OutOfBoundsIndex{m_rows.size(), j};
+            }
+        }
+
+        if (j < i)
+        {
+            std::swap(i, j);
+        }
+        insert_entry_in_row(i, j, val);
+    }
+
 private:
     std::vector<small_vec> m_rows;
 
-    void combine_duplicates(small_vec &row) noexcept
+    static void combine_duplicates(small_vec &row) noexcept
     {
         if (row.size() == 0)
         {
@@ -184,6 +207,29 @@ private:
         auto new_end = std::unique(row.begin(), row.end(),
                 [](auto e1, auto e2) { return get<0>(e1) == get<0>(e2); });
         row.erase(new_end, row.end());
+    }
+
+    void insert_entry_in_row(std::size_t i, std::size_t j, T val)
+    {
+        auto &row = m_rows[i];
+        auto dst_iterator = std::find_if(row.begin(), row.end(),
+                [=](const std::tuple<size_t, T> &entry)
+                {
+                    return get<0>(entry) >= j;
+                }
+        );
+        if (dst_iterator == row.end())
+        {
+            row.push_back(std::make_tuple(j, val));
+        }
+        else if (get<0>(*dst_iterator) == j)
+        {
+            get<1>(*dst_iterator) += val;
+        }
+        else
+        {
+            row.insert(dst_iterator, std::make_tuple(j, val));
+        }
     }
 };
 
@@ -411,14 +457,99 @@ TEST_CASE("Check that some exceptions get thrown as they should")
     };
 
     REQUIRE_NOTHROW(construct_ok());
+    {
+        SymmetricSparseMatrix<int, 1> A(3, entry, std::false_type{});
 
-    const SymmetricSparseMatrix<int, 1> A(3, entry, std::false_type{});
+        REQUIRE_NOTHROW(A.row(0));
+        REQUIRE_NOTHROW(A.row(1));
+        REQUIRE_NOTHROW(A.row(2));
+        REQUIRE_NOTHROW(A.row(3, std::false_type{}));
+        REQUIRE_THROWS_AS(A.row(3), OutOfBoundsIndex);
+    }
 
-    REQUIRE_NOTHROW(A.row(0));
-    REQUIRE_NOTHROW(A.row(1));
-    REQUIRE_NOTHROW(A.row(2));
-    REQUIRE_NOTHROW(A.row(3));
-    REQUIRE_THROWS_AS(A.row(3, std::true_type{}), OutOfBoundsIndex);
+    {
+        SymmetricSparseMatrix<int, 1> A(3, entry, std::false_type{});
+
+        REQUIRE_NOTHROW(A.insert_entry(1, 0, 1));
+        REQUIRE_NOTHROW(A.insert_entry(1, 1, 1));
+        REQUIRE_THROWS_AS(A.insert_entry(1, 3, 0), OutOfBoundsIndex);
+        REQUIRE_NOTHROW(A.insert_entry(1, 3, 0, std::false_type{}));
+        REQUIRE_THROWS_AS(A.insert_entry(1, 2, 0), smv::MaxSizeExceeded);
+    }
+} // TEST_CASE
+
+TEST_CASE("Test constructing a matrix using successive calls to insert")
+{
+    SUBCASE("Test full combo, lower triangular indices + combining")
+    {
+        std::vector<std::tuple<int, int, int>> entries = {
+            std::make_tuple(0, 0, 1),
+            std::make_tuple(0, 1, 1),
+            std::make_tuple(1, 0, 1),
+            std::make_tuple(0, 2, 1),
+            std::make_tuple(2, 0, 1),
+            std::make_tuple(0, 2, 1),
+            std::make_tuple(0, 3, 2),
+            std::make_tuple(3, 0, 2),
+            std::make_tuple(1, 1, 1),
+            std::make_tuple(1, 1, 1),
+            std::make_tuple(1, 2, 2),
+            std::make_tuple(2, 1, 1),
+            std::make_tuple(1, 3, 4),
+            std::make_tuple(2, 2, 3),
+            std::make_tuple(3, 2, 4),
+            std::make_tuple(3, 3, 4)
+        };
+
+        std::shuffle(entries.begin(), entries.end(),
+                     std::default_random_engine());
+
+        SymmetricSparseMatrix<int, 3> A(4);
+        for (const auto &entry: entries)
+        {
+            A.insert_entry(get<0>(entry), get<1>(entry), get<2>(entry));
+        }
+
+        {
+            const auto &row = A.row(0);
+            REQUIRE(row.size() == 4);
+            REQUIRE(get<0>(row[0]) == 0);
+            REQUIRE(get<1>(row[0]) == 1);
+            REQUIRE(get<0>(row[1]) == 1);
+            REQUIRE(get<1>(row[1]) == 2);
+            REQUIRE(get<0>(row[2]) == 2);
+            REQUIRE(get<1>(row[2]) == 3);
+            REQUIRE(get<0>(row[3]) == 3);
+            REQUIRE(get<1>(row[3]) == 4);
+        }
+        
+        {
+            const auto &row = A.row(1);
+            REQUIRE(row.size() == 3);
+            REQUIRE(get<0>(row[0]) == 1);
+            REQUIRE(get<1>(row[0]) == 2);
+            REQUIRE(get<0>(row[1]) == 2);
+            REQUIRE(get<1>(row[1]) == 3);
+            REQUIRE(get<0>(row[2]) == 3);
+            REQUIRE(get<1>(row[2]) == 4);
+        }
+
+        {
+            const auto &row = A.row(2);
+            REQUIRE(row.size() == 2);
+            REQUIRE(get<0>(row[0]) == 2);
+            REQUIRE(get<1>(row[0]) == 3);
+            REQUIRE(get<0>(row[1]) == 3);
+            REQUIRE(get<1>(row[1]) == 4);
+        }
+
+        {
+            const auto &row = A.row(3);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 3);
+            REQUIRE(get<1>(row[0]) == 4);
+        }
+    } // SUBCASE
 } // TEST_CASE
 
 #endif // DOCTEST_LIBRARY_INCLUDED
