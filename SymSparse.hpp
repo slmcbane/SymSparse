@@ -184,6 +184,58 @@ public:
         insert_entry_in_row(i, j, val);
     }
 
+    template <class RHS, class Adjacent, class CheckBounds = std::true_type>
+    void eliminate_dof(std::size_t index, T val, T scale, RHS &rhs,
+                       const Adjacent &adjacent,
+                       CheckBounds check_bounds = CheckBounds{})
+    {
+        if (check_bounds && (index >= m_rows.size()))
+        {
+            throw OutOfBoundsIndex{m_rows.size(), index};
+        }
+
+        for (auto row: adjacent)
+        {
+            if (check_bounds && (static_cast<std::size_t>(row) >= m_rows.size()))
+            {
+                throw OutOfBoundsIndex{m_rows.size(), index};
+            }
+            
+            if (static_cast<std::size_t>(row) >= index) { continue; }
+
+            auto it = m_rows[row].begin();
+            while (it != m_rows[row].end() && get<0>(*it) < index)
+            {
+                it += 1;
+            }
+
+            if (get<0>(*it) == index)
+            {
+                rhs[row] -= get<1>(*it) * val;
+                m_rows[row].erase(it);
+            }
+        }
+
+        auto it = m_rows[index].begin();
+        while (it != m_rows[index].end())
+        {
+            auto row = get<0>(*it);
+            if (row == index)
+            {
+                it += 1;
+            }
+            else
+            {
+                rhs[row] -= get<1>(*it) * val;
+                it = m_rows[index].erase(it);
+            }
+        }
+
+        m_rows[index].empty();
+        m_rows[index].push_back(std::make_tuple(index, scale));
+        rhs[index] = val * scale;
+    }
+
 private:
     std::vector<small_vec> m_rows;
 
@@ -552,6 +604,164 @@ TEST_CASE("Test constructing a matrix using successive calls to insert")
             REQUIRE(get<1>(row[0]) == 4);
         }
     } // SUBCASE
+} // TEST_CASE
+
+TEST_CASE("Test eliminating degrees of freedom")
+{
+    std::array<std::array<int, 3>, 16> entries = {
+        0, 0, 2,
+        0, 3, 5,
+        0, 5, 1,
+        0, 6, 3,
+        1, 1, 3,
+        1, 2, 2,
+        1, 4, 3,
+        1, 6, 1,
+        2, 2, 4,
+        2, 3, 1,
+        3, 3, 1,
+        3, 5, 6,
+        3, 6, 5,
+        4, 4, 3,
+        5, 5, 2,
+        6, 6, 5
+    };
+
+    std::array<int, 7> rhs = { 1, 2, 3, 4, 5, 6, 7 };
+
+    SymmetricSparseMatrix<int, 3> A(7, entries);
+
+    SUBCASE("Eliminate degree of freedom given only the shared neighbors")
+    {
+        A.eliminate_dof(3, 3, 1, rhs, std::array<int, 4>{0, 2, 5, 6});
+        REQUIRE(rhs == std::array<int, 7>{ -14, 2, 0, 3, 5, -12, -8 });
+
+        {
+            const auto &row = A.row(0);
+
+            REQUIRE(row.size() == 3);
+            REQUIRE(get<0>(row[0]) == 0);
+            REQUIRE(get<1>(row[0]) == 2);
+            REQUIRE(get<0>(row[1]) == 5);
+            REQUIRE(get<1>(row[1]) == 1);
+            REQUIRE(get<0>(row[2]) == 6);
+            REQUIRE(get<1>(row[2]) == 3);
+        }
+
+        {
+            const auto &row = A.row(1);
+            REQUIRE(row.size() == 4);
+            REQUIRE(get<0>(row[0]) == 1);
+            REQUIRE(get<1>(row[0]) == 3);
+            REQUIRE(get<0>(row[1]) == 2);
+            REQUIRE(get<1>(row[1]) == 2);
+            REQUIRE(get<0>(row[2]) == 4);
+            REQUIRE(get<1>(row[2]) == 3);
+            REQUIRE(get<0>(row[3]) == 6);
+            REQUIRE(get<1>(row[3]) == 1);
+        }
+
+        {
+            const auto &row = A.row(2);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 2);
+            REQUIRE(get<1>(row[0]) == 4);
+        }
+
+        {
+            const auto &row = A.row(3);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 3);
+            REQUIRE(get<1>(row[0]) == 1);
+        }
+
+        {
+            const auto &row = A.row(4);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 4);
+            REQUIRE(get<1>(row[0]) == 3);
+        }
+
+        {
+            const auto &row = A.row(5);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 5);
+            REQUIRE(get<1>(row[0]) == 2);
+        }
+
+        {
+            const auto &row = A.row(6);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 6);
+            REQUIRE(get<1>(row[0]) == 5);
+        }
+    } // SUBCASE
+
+    SUBCASE("Test eliminating dof given extraneous neighbors")
+    {
+        A.eliminate_dof(3, 3, 1, rhs, std::array<int, 7>{0, 1, 2, 3, 4, 5, 6});
+        REQUIRE(rhs == std::array<int, 7>{ -14, 2, 0, 3, 5, -12, -8 });
+
+        {
+            const auto &row = A.row(0);
+
+            REQUIRE(row.size() == 3);
+            REQUIRE(get<0>(row[0]) == 0);
+            REQUIRE(get<1>(row[0]) == 2);
+            REQUIRE(get<0>(row[1]) == 5);
+            REQUIRE(get<1>(row[1]) == 1);
+            REQUIRE(get<0>(row[2]) == 6);
+            REQUIRE(get<1>(row[2]) == 3);
+        }
+
+        {
+            const auto &row = A.row(1);
+            REQUIRE(row.size() == 4);
+            REQUIRE(get<0>(row[0]) == 1);
+            REQUIRE(get<1>(row[0]) == 3);
+            REQUIRE(get<0>(row[1]) == 2);
+            REQUIRE(get<1>(row[1]) == 2);
+            REQUIRE(get<0>(row[2]) == 4);
+            REQUIRE(get<1>(row[2]) == 3);
+            REQUIRE(get<0>(row[3]) == 6);
+            REQUIRE(get<1>(row[3]) == 1);
+        }
+
+        {
+            const auto &row = A.row(2);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 2);
+            REQUIRE(get<1>(row[0]) == 4);
+        }
+
+        {
+            const auto &row = A.row(3);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 3);
+            REQUIRE(get<1>(row[0]) == 1);
+        }
+
+        {
+            const auto &row = A.row(4);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 4);
+            REQUIRE(get<1>(row[0]) == 3);
+        }
+
+        {
+            const auto &row = A.row(5);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 5);
+            REQUIRE(get<1>(row[0]) == 2);
+        }
+
+        {
+            const auto &row = A.row(6);
+            REQUIRE(row.size() == 1);
+            REQUIRE(get<0>(row[0]) == 6);
+            REQUIRE(get<1>(row[0]) == 5);
+        }
+    }
 } // TEST_CASE
 
 #endif // DOCTEST_LIBRARY_INCLUDED
