@@ -236,6 +236,45 @@ public:
         rhs[index] = val * scale;
     }
 
+    template <class X, class Y, class CheckSizes = std::true_type>
+    Y &mul(const X &x, Y &y, CheckSizes size_check = CheckSizes{}) const
+    {
+        if (size_check())
+        {
+            if (x.size() != m_rows.size())
+            {
+                throw DimensionMismatch(m_rows.size(), x.size());
+            }
+            if (y.size() != m_rows.size())
+            {
+                throw DimensionMismatch(m_rows.size(), y.size());
+            }
+        }
+
+        // Zero y (Hopefully this optimizes to a memset call; I'd like to use
+        // std::fill but Eigen provides at least one example of vector objects
+        // that don't implement the iterator interface for the STL).
+        for (std::size_t i = 0; i < m_rows.size(); ++i)
+        {
+            y[i] = static_cast<T>(0);
+        }
+
+        for (std::size_t i = 0; i < m_rows.size(); ++i)
+        {
+            for (const auto &entry: m_rows[i])
+            {
+                const auto j = get<0>(entry);
+                const auto a_ij = get<1>(entry);
+                y[i] += a_ij * x[j];
+                if (j != i)
+                {
+                    y[j] += a_ij * x[i];
+                }
+            }
+        }
+        return y;
+    }
+
 private:
     std::vector<small_vec> m_rows;
 
@@ -762,6 +801,39 @@ TEST_CASE("Test eliminating degrees of freedom")
             REQUIRE(get<1>(row[0]) == 5);
         }
     }
+} // TEST_CASE
+
+TEST_CASE("Test multiplication by a vector")
+{
+    const std::array<std::array<int, 3>, 12> entries = {
+        0, 0, 2,
+        0, 5, 1,
+        0, 6, 3,
+        1, 1, 3,
+        1, 2, 2,
+        1, 4, 3,
+        1, 6, 1,
+        2, 2, 4,
+        3, 3, 1,
+        4, 4, 3,
+        5, 5, 2,
+        6, 6, 5
+    };
+
+    const SymmetricSparseMatrix<int, 3> A(7, entries);
+
+    const std::array<int, 7> rhs = { -14, 2, 0, 3, 5, -12, -8 };
+    std::array<int, 7> dst;
+
+    // Test simple overwrite of dst
+    A.mul(rhs, dst);
+
+    REQUIRE(dst == std::array<int, 7>{ -64, 13, 4, 3, 21, -38, -80 });
+
+    // Test with alpha and beta arguments (a * A * x + b * y) 
+    A.mul(3, rhs, -2, dst);
+
+    REQUIRE(dst == std::array<int, 7>{ -64, 13, 4, 3, 21, -38, -80 });
 } // TEST_CASE
 
 #endif // DOCTEST_LIBRARY_INCLUDED
