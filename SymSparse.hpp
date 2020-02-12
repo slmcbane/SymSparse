@@ -27,9 +27,13 @@
 
 #include <algorithm>
 #include <cstddef> // std::size_t;
+#include <cstdint>
+#include <cstdio>
 #include <exception>
+#include <numeric>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 using std::get;
@@ -330,6 +334,8 @@ public:
         return y;
     }
 
+    size_t num_rows() const noexcept { return m_rows.size(); }
+
 private:
     std::vector<small_vec> m_rows;
 
@@ -380,6 +386,180 @@ private:
         }
     }
 };
+
+// Trait specifying the magic number for a type to go in the serialization
+// header of a serialized sparse matrix holding values of that type.
+// All values should be >= 0. The value of -1 in the base type will disable
+// compilation, as will any other values < 0.
+template <class T>
+struct type_number : std::integral_constant<int32_t, -1>
+{
+};
+
+// Specializations.
+template <>
+struct type_number<uint8_t> : std::integral_constant<int32_t, 0>
+{
+};
+
+template <>
+struct type_number<float> : std::integral_constant<int32_t, 1>
+{
+};
+
+template <>
+struct type_number<double> : std::integral_constant<int32_t, 2>
+{
+};
+
+template <>
+struct type_number<int> : std::integral_constant<int32_t, 3>
+{};
+
+template <class T>
+struct has_valid_type_number : std::integral_constant<bool,
+    std::is_same<int32_t, typename type_number<T>::value_type>::value &&
+    type_number<T>::value >= 0>
+{};
+
+struct SerializationException : public std::exception
+{
+    const char *msg;
+    const char *what() const noexcept { return msg; }
+
+    SerializationException(const char *m) noexcept : msg{m} {}
+};
+
+/*
+ * Serialize a matrix A to file "dst".
+ * For types not included in the specializations above, YOU will need to define
+ * one for serialization and deserialization to be enabled.
+ * 
+ * Serialization format
+ * ====================
+ * - A 32-bit signed integer specifying the type of entries in the matrix
+ * - A 64-bit unsigned integer specifying the number of rows in the matrix
+ * - For each row, a 64-bit unsigned integer that gives the number of entries
+ *   in that row.
+ * - The columns of each entry as 64-bit unsigned integers; these are in one
+ *   block in order to optimize IO performance.
+ * - The values of each entry in this platform's canonical binary format.
+ */
+template <class T, size_t N, bool B>
+typename std::enable_if<has_valid_type_number<T>::value>::type
+serialize(FILE *dst, const SymmetricSparseMatrix<T, N, B> &A)
+{
+    constexpr int32_t typecode = type_number<T>::value;
+    fwrite(&typecode, sizeof(int32_t), 1, dst);
+    uint64_t nrows = A.num_rows();
+    fwrite(&nrows, sizeof(uint64_t), 1, dst);
+
+    std::vector<uint64_t> ibuf;
+    std::vector<T> dbuf;
+    ibuf.reserve(nrows);
+
+    size_t nentries = 0;
+    for (size_t i = 0; i < nrows; ++i)
+    {
+        ibuf.push_back(A.row(i).size());
+        nentries += A.row(i).size();
+    }
+
+    fwrite(ibuf.data(), sizeof(uint64_t), ibuf.size(), dst);
+    ibuf.clear();
+    ibuf.reserve(nentries);
+    dbuf.reserve(nentries);
+
+    for (size_t i = 0; i < nrows; ++i)
+    {
+        const auto &row = A.row(i);
+        for (const auto &entry : row)
+        {
+            ibuf.push_back(std::get<0>(entry));
+            dbuf.push_back(std::get<1>(entry));
+        }
+    }
+
+    fwrite(ibuf.data(), sizeof(uint64_t), ibuf.size(), dst);
+    fwrite(dbuf.data(), sizeof(T), dbuf.size(), dst);
+}
+
+template <class T, size_t N>
+typename std::enable_if<has_valid_type_number<T>::value,
+                        SymmetricSparseMatrix<T, N>>::type
+deserialize(FILE *src)
+{
+    int32_t typecode;
+    std::vector<std::tuple<std::size_t, std::size_t, T>> entries;
+
+    fread(&typecode, sizeof(int32_t), 1, src);
+    if (typecode != type_number<T>::value)
+    {
+        throw SerializationException("Got unknown type code");
+    }
+
+    uint64_t nrows;
+    fread(&nrows, sizeof(uint64_t), 1, src);
+    std::vector<uint64_t> ibuf(static_cast<typename std::vector<uint64_t>::size_type>(nrows));
+    fread(ibuf.data(), sizeof(uint64_t), ibuf.size(), src);
+
+    auto nentries = std::accumulate(ibuf.begin(), ibuf.end(), static_cast<uint64_t>(0));
+    entries.resize(nentries);
+    size_t index = 0;
+    for (size_t i = 0; i < nrows; ++i)
+    {
+        for (size_t j = 0; j < ibuf[i]; ++j)
+        {
+            std::get<0>(entries[index++]) = i;
+        }
+    }
+
+    ibuf.resize(nentries);
+    fread(ibuf.data(), sizeof(uint64_t), ibuf.size(), src);
+
+    for (size_t i = 0; i < nentries; ++i)
+    {
+        std::get<1>(entries[i]) = ibuf[i];
+    }
+    ibuf = std::vector<uint64_t>();
+
+    std::vector<T> dbuf(static_cast<typename std::vector<T>::size_type>(nentries));
+    fread(dbuf.data(), sizeof(T), dbuf.size(), src);
+    for (size_t i = 0; i < nentries; ++i)
+    {
+        std::get<2>(entries[i]) = dbuf[i];
+    }
+    dbuf = std::vector<T>();
+
+    return SymmetricSparseMatrix<T, N>(nrows, entries);
+}
+
+template <class T, size_t N1, size_t N2, bool B1, bool B2>
+bool operator==(const SymmetricSparseMatrix<T, N1, B1> &A,
+                const SymmetricSparseMatrix<T, N2, B2> &B) noexcept
+{
+    if (A.num_rows() != B.num_rows())
+    {
+        return false;
+    }
+
+    for (size_t i = 0; i < A.num_rows(); ++i)
+    {
+        const auto &Arow = A.row(i);
+        const auto &Brow = B.row(i);
+
+        for (auto pair = std::make_pair(Arow.begin(), Brow.begin());
+             pair.first != Arow.end() && pair.second != Brow.end();
+             ++pair.first, ++pair.second)
+        {
+            if (*pair.first != *pair.second)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 /********************************************************************************
  * This block of code is tests, compiled if doctest.hpp is included
@@ -890,6 +1070,24 @@ TEST_CASE("Test multiplication by a vector")
 
     REQUIRE(dst == std::array<int, 7>{ -64, 13, 4, 3, 21, -38, -80 });
 } // TEST_CASE
+
+TEST_CASE("Test serialization of SymSparse")
+{
+    std::array<std::array<int, 3>, 10> entries = {
+        0, 0, 1, 0, 1, 2, 0, 2, 3, 0, 3, 4,
+        1, 1, 2, 1, 2, 3, 1, 3, 4, 2, 2, 3,
+        2, 3, 4, 3, 3, 4};
+
+    SymmetricSparseMatrix<int, 3> A(4, entries);
+    FILE *destination_file = fopen("serialized.dat", "w");
+    serialize(destination_file, A);
+    fclose(destination_file);
+    FILE *src_file = fopen("serialized.dat", "r");
+    auto B = deserialize<int, 3>(src_file);
+    fclose(src_file);
+
+    REQUIRE(A == B);
+}
 
 #endif // DOCTEST_LIBRARY_INCLUDED
 
