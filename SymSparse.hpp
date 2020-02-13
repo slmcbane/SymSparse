@@ -254,7 +254,7 @@ public:
             }
         }
 
-        m_rows[index].empty();
+        m_rows[index].clear();
         m_rows[index].push_back(std::make_tuple(index, scale));
         rhs[index] = val * scale;
     }
