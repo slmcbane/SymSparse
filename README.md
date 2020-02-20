@@ -22,7 +22,9 @@ copyright terms as this repository. Most recently, `SymSparse` was tested agains
 Sean McBane (<sean.mcbane@protonmail.com>)
 
 ## Version
-This is v1.0.0.
+v1.0.1
+### Updates
+v1.0.0 -> v1.0.1 Fixed a bug in `eliminate_dof` that *could* hit undefined behavior.
 
 ## Copyright
 Copyright 2020 The University of Texas at Austin.
