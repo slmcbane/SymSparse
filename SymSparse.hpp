@@ -228,7 +228,7 @@ public:
                 it += 1;
             }
 
-            if (get<0>(*it) == index)
+            if (it != m_rows[row].end() && get<0>(*it) == index)
             {
                 rhs[row] -= get<1>(*it) * val;
                 m_rows[row].erase(it);
