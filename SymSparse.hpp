@@ -236,7 +236,7 @@ class SymmetricSparseMatrix
 
             if (it != m_rows[row].end() && get<0>(*it) == index)
             {
-                rhs[row] -= get<1>(*it) * val;
+                rhs.row(row).array() -= get<1>(*it) * val;
                 m_rows[row].erase(it);
             }
         }
@@ -251,14 +251,14 @@ class SymmetricSparseMatrix
             }
             else
             {
-                rhs[row] -= get<1>(*it) * val;
+                rhs.row(row).array() -= get<1>(*it) * val;
                 it = m_rows[index].erase(it);
             }
         }
 
         m_rows[index].clear();
         m_rows[index].push_back(std::make_tuple(index, scale));
-        rhs[index] = val * scale;
+        rhs.row(index).array() = val * scale;
     }
 
     template <class Adjacent, class CheckBounds = std::true_type>
